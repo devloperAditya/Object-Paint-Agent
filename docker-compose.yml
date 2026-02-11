@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${PORT:-7860}:7860"
+    environment:
+      - PORT=7860
+      - MAX_IMAGE_PIXELS=1024
+      - LITE_MODE=true
+    volumes:
+      - object_paint_data:/app/data
+      - object_paint_models:/app/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  object_paint_data:
+  object_paint_models:

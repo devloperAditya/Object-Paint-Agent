@@ -1,0 +1,32 @@
+# Data and models (runtime)
+data/
+models/
+!data/.gitkeep
+!models/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing / lint
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -58,9 +58,18 @@ def run_recolor(
     mask: np.ndarray,
     target_hex: str,
     strength: float,
+    source_color_hex: str | None = None,
+    hue_tolerance_degrees: float = 25.0,
 ) -> np.ndarray:
-    """Recolor masked region; preserve alpha and outside pixels."""
-    return recolor_masked_region(image, mask, target_hex, strength=strength)
+    """Recolor masked region; optionally only where pixel color matches source_color_hex."""
+    return recolor_masked_region(
+        image,
+        mask,
+        target_hex,
+        strength=strength,
+        source_color_hex=source_color_hex,
+        hue_tolerance_degrees=hue_tolerance_degrees,
+    )
 
 
 def build_metadata(

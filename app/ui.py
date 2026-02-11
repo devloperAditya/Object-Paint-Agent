@@ -176,6 +176,9 @@ def on_apply_recolor(
     state: dict,
     color_hex: str,
     recolor_strength: float,
+    use_replace_color: bool,
+    replace_color_hex: str,
+    hue_tolerance_degrees: float,
 ) -> tuple[dict, np.ndarray | None, str, str]:
     """Refine mask (from state), recolor, update painted and metadata."""
     if state.get("image") is None:
@@ -188,8 +191,20 @@ def on_apply_recolor(
             color_hex = "#" + color_hex
     except Exception:
         color_hex = "#FF0000"
+    source_hex = None
+    if use_replace_color and replace_color_hex:
+        source_hex = (replace_color_hex or "").strip()
+        if source_hex and not source_hex.startswith("#") and "rgba" not in source_hex.lower():
+            source_hex = "#" + source_hex
     t0 = time.perf_counter()
-    painted = run_recolor(state["image"], state["mask"], color_hex, recolor_strength)
+    painted = run_recolor(
+        state["image"],
+        state["mask"],
+        color_hex,
+        recolor_strength,
+        source_color_hex=source_hex,
+        hue_tolerance_degrees=max(5, min(90, hue_tolerance_degrees)),
+    )
     elapsed = time.perf_counter() - t0
     state["painted"] = painted
     # Normalize color for metadata (always show #RRGGBB)
@@ -258,6 +273,27 @@ def build_ui() -> gr.Blocks:
                 color_picker = gr.ColorPicker(label="Paint color (hex)", value="#E53935")
                 recolor_btn = gr.Button("Apply recolor")
                 recolor_status = gr.Textbox(label="Recolor", interactive=False)
+
+                with gr.Accordion("Recolor only a specific color (e.g. yellow body, keep beak)", open=False):
+                    gr.Markdown(
+                        "Enable to change only pixels that match a **color to replace**. "
+                        "Example: select the duck, set **Color to replace** to yellow, **Paint color** to blue — only the yellow body turns blue; the orange/red beak stays."
+                    )
+                    use_replace_color = gr.Checkbox(
+                        value=False,
+                        label="Only recolor pixels matching the color below",
+                    )
+                    replace_color_picker = gr.ColorPicker(
+                        label="Color to replace (pick the color in the object to change, e.g. yellow)",
+                        value="#FFEB3B",
+                    )
+                    hue_tolerance_slider = gr.Slider(
+                        10,
+                        60,
+                        value=25,
+                        step=1,
+                        label="Color match tolerance (degrees) — larger = more pixels match",
+                    )
 
                 with gr.Accordion("Optional: Detect objects", open=False):
                     detect_btn = gr.Button("Detect objects")
@@ -335,7 +371,14 @@ def build_ui() -> gr.Blocks:
         # Recolor
         recolor_btn.click(
             on_apply_recolor,
-            [state, color_picker, recolor_strength],
+            [
+                state,
+                color_picker,
+                recolor_strength,
+                use_replace_color,
+                replace_color_picker,
+                hue_tolerance_slider,
+            ],
             [state, painted_display, metadata_json, recolor_status],
         )
 

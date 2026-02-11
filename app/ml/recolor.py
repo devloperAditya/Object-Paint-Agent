@@ -41,19 +41,52 @@ def parse_color_to_rgb(value: str) -> tuple[int, int, int]:
         return (255, 0, 0)
 
 
+def _build_color_match_mask(
+    image_rgb: np.ndarray,
+    object_mask: np.ndarray,
+    source_color_hex: str,
+    hue_tolerance_degrees: float,
+    min_saturation: int = 20,
+    min_value: int = 20,
+) -> np.ndarray:
+    """Within object_mask, return a float mask [0,1] of pixels similar to source_color (HSV hue).
+    Used to recolor only e.g. yellow body while keeping red beak.
+    - hue_tolerance_degrees: hue range ± this (in 0-360 scale); OpenCV H is 0-180 so we use half.
+    """
+    bgr = (np.clip(image_rgb, 0, 1) * 255).astype(np.uint8)[:, :, ::-1]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    H, S, V = hsv[:, :, 0].astype(np.float64), hsv[:, :, 1], hsv[:, :, 2]
+
+    r, g, b = parse_color_to_rgb(source_color_hex)
+    src_bgr = np.array([[[b, g, r]]], dtype=np.uint8)
+    src_hsv = cv2.cvtColor(src_bgr, cv2.COLOR_BGR2HSV)
+    h0 = float(src_hsv[0, 0, 0])
+    # OpenCV H is 0-180; tolerance in degrees 0-360 -> half in 0-180
+    tol = max(1.0, min(90.0, hue_tolerance_degrees)) / 2.0
+
+    # Hue distance with wraparound (0-180 circle)
+    d = np.abs(H - h0)
+    hue_diff = np.minimum(d, 180.0 - d)
+    hue_ok = (hue_diff <= tol).astype(np.float64)
+    sat_ok = (S >= min_saturation).astype(np.float64)
+    val_ok = (V >= min_value).astype(np.float64)
+    color_mask = hue_ok * sat_ok * val_ok
+    return np.clip(object_mask * color_mask, 0, 1).astype(np.float32)
+
+
 def recolor_masked_region(
     image: np.ndarray,
     mask: np.ndarray,
     target_hex: str,
     strength: float = 0.8,
+    source_color_hex: str | None = None,
+    hue_tolerance_degrees: float = 25.0,
 ) -> np.ndarray:
     """Recolor only the masked region with the target color (direct RGB).
-    Original alpha is unchanged. Rest of image is untouched.
-    - image: (H, W, 3) or (H, W, 4) uint8.
-    - mask: (H, W) float in [0, 1].
-    - target_hex: e.g. '#FF0000' (or rgba(...) from Gradio).
-    - strength: 0--1 blend toward target (1 = solid target color in mask).
-    Returns same shape as image, uint8.
+    If source_color_hex is set, only pixels within the mask that match that color
+    (e.g. yellow) are recolored; other parts (e.g. red beak) stay unchanged.
+    - source_color_hex: color in the object to replace (e.g. yellow #FFEB3B).
+    - hue_tolerance_degrees: how close the pixel hue must be to source (e.g. 25).
     """
     if image.ndim == 2:
         image = np.stack([image] * 3 + [np.full_like(image, 255)], axis=-1)
@@ -65,7 +98,6 @@ def recolor_masked_region(
     alpha_orig = image[:, :, 3].copy()
     h, w = rgb.shape[:2]
 
-    # Target color in RGB [0, 1], shape (3,)
     target_rgb = np.array(parse_color_to_rgb(target_hex), dtype=np.float64) / 255.0
     target_rgb = np.clip(target_rgb, 0, 1)
 
@@ -87,7 +119,15 @@ def recolor_masked_region(
         mask_float = mask_float / 255.0
     mask_float = np.clip(mask_float, 0, 1)
 
-    # Direct RGB: in masked region, blend original toward target by strength
+    # Optionally restrict to pixels matching a source color (e.g. only yellow in the duck)
+    if source_color_hex:
+        mask_float = _build_color_match_mask(
+            rgb,
+            mask_float,
+            source_color_hex,
+            hue_tolerance_degrees=hue_tolerance_degrees,
+        )
+
     mask_3 = np.stack([mask_float] * 3, axis=-1)
     target_bc = np.broadcast_to(target_rgb, (h, w, 3))
     painted_rgb = rgb * (1 - strength * mask_3) + target_bc * (strength * mask_3)

@@ -11,25 +11,15 @@ import numpy as np
 
 from app.ml.detect import DetectedObject, detect_objects
 from app.ml.recolor import recolor_masked_region
-from app.ml.refine import refine_mask
-from app.ml.segment import segment_from_points, segment_from_rect
-from app.utils.image_io import ensure_rgba, get_image_size, save_image
+from app.ml.refine import expand_mask_to_include_shadow, refine_mask
+from app.ml.segment import segment_from_rect
 from app.utils.bbox import draw_bbox_overlay
+from app.utils.image_io import ensure_rgba, get_image_size, save_image
 
 
 def run_detection(image: np.ndarray, use_grounding_dino: bool) -> tuple[list[DetectedObject], str]:
     """Run detector; return (objects, mode)."""
     return detect_objects(image, use_grounding_dino=use_grounding_dino)
-
-
-def run_segment(
-    image: np.ndarray,
-    fg_points: list[tuple[int, int]],
-    bg_points: list[tuple[int, int]],
-    use_sam: bool,
-) -> tuple[np.ndarray, str]:
-    """Segment from points; return (mask, mode)."""
-    return segment_from_points(image, fg_points, bg_points, use_sam=use_sam)
 
 
 def run_segment_rect(
@@ -51,6 +41,20 @@ def run_refine(
 ) -> np.ndarray:
     """Refine mask; return float mask [0,1]."""
     return refine_mask(mask, morph_kernel, feather_px, mask_threshold)
+
+
+def run_expand_mask_shadow(
+    image: np.ndarray,
+    mask: np.ndarray,
+    dilation_px: int = 20,
+    shadow_value_threshold: float = 0.5,
+) -> np.ndarray:
+    """Expand mask to include nearby dark pixels (cast shadow)."""
+    return expand_mask_to_include_shadow(
+        image, mask,
+        dilation_px=dilation_px,
+        shadow_value_threshold=shadow_value_threshold,
+    )
 
 
 def run_recolor(
@@ -96,7 +100,7 @@ def export_outputs(
     out_dir: Path,
     base_name: str = "output",
 ) -> tuple[Path, Path, Path]:
-    """Save painted PNG, mask PNG, and metadata JSON. Returns (painted_path, mask_path, meta_path)."""
+    """Save painted PNG, mask PNG, and metadata JSON."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     painted_path = out_dir / f"{base_name}_painted.png"

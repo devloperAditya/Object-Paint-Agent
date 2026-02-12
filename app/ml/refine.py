@@ -1,4 +1,4 @@
-"""Mask refinement: morphological ops and feathering."""
+"""Mask refinement: morphological ops, feathering, and shadow expansion."""
 
 from __future__ import annotations
 
@@ -12,12 +12,7 @@ def refine_mask(
     feather_px: float = 2.0,
     mask_threshold: float = 0.5,
 ) -> np.ndarray:
-    """Refine a binary or soft mask with morphological close/open and Gaussian feather.
-    - morph_kernel: odd int 1--9 for open/close.
-    - feather_px: Gaussian blur sigma (0 = no feather).
-    - mask_threshold: binarize soft mask at this value (0--1).
-    Returns float mask in [0, 1] with same shape as input.
-    """
+    """Refine a binary or soft mask with morphological close/open and Gaussian feather."""
     if mask.ndim > 2:
         mask = mask.squeeze()
     if mask.dtype != np.uint8:
@@ -39,3 +34,34 @@ def refine_mask(
         return np.clip(blurred, 0, 1).astype(np.float32)
 
     return (binary.astype(np.float32) / 255.0).astype(np.float32)
+
+
+def expand_mask_to_include_shadow(
+    image: np.ndarray,
+    mask: np.ndarray,
+    dilation_px: int = 20,
+    shadow_value_threshold: float = 0.5,
+) -> np.ndarray:
+    """Expand the object mask to include nearby dark pixels (cast shadow)."""
+    if mask.ndim > 2:
+        mask = mask.squeeze()
+    mask_float = np.clip(np.asarray(mask, dtype=np.float64), 0, 1)
+    h, w = mask_float.shape[:2]
+    binary = (mask_float >= 0.5).astype(np.uint8) * 255
+
+    k = max(3, min(51, int(dilation_px) * 2 + 1) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    dilated = cv2.dilate(binary, kernel)
+    ring = np.clip(dilated.astype(np.int32) - binary.astype(np.int32), 0, 255).astype(np.uint8)
+
+    rgb = image[:, :, :3] if image.shape[-1] >= 3 else image
+    if rgb.ndim == 2:
+        gray = rgb
+    else:
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    v = gray.astype(np.float64) / 255.0
+    thresh = max(0.1, min(0.9, shadow_value_threshold))
+    dark = (v <= thresh).astype(np.uint8) * 255
+    shadow_mask = ((ring > 0) & (dark > 0)).astype(np.float64)
+    combined = np.clip(mask_float + shadow_mask, 0, 1).astype(np.float32)
+    return combined

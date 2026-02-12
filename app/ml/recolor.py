@@ -46,12 +46,11 @@ def _build_color_match_mask(
     object_mask: np.ndarray,
     source_color_hex: str,
     hue_tolerance_degrees: float,
-    min_saturation: int = 20,
-    min_value: int = 20,
+    min_saturation: int = 5,
+    min_value: int = 5,
 ) -> np.ndarray:
     """Within object_mask, return a float mask [0,1] of pixels similar to source_color (HSV hue).
-    Used to recolor only e.g. yellow body while keeping red beak.
-    - hue_tolerance_degrees: hue range ± this (in 0-360 scale); OpenCV H is 0-180 so we use half.
+    Includes shaded areas on the object (same hue, darker/lower V) by using low min_value/min_saturation.
     """
     bgr = (np.clip(image_rgb, 0, 1) * 255).astype(np.uint8)[:, :, ::-1]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -61,13 +60,12 @@ def _build_color_match_mask(
     src_bgr = np.array([[[b, g, r]]], dtype=np.uint8)
     src_hsv = cv2.cvtColor(src_bgr, cv2.COLOR_BGR2HSV)
     h0 = float(src_hsv[0, 0, 0])
-    # OpenCV H is 0-180; tolerance in degrees 0-360 -> half in 0-180
     tol = max(1.0, min(90.0, hue_tolerance_degrees)) / 2.0
 
-    # Hue distance with wraparound (0-180 circle)
     d = np.abs(H - h0)
     hue_diff = np.minimum(d, 180.0 - d)
     hue_ok = (hue_diff <= tol).astype(np.float64)
+    # Low thresholds so shaded/darker areas on the object (same hue, low V/S) are included
     sat_ok = (S >= min_saturation).astype(np.float64)
     val_ok = (V >= min_value).astype(np.float64)
     color_mask = hue_ok * sat_ok * val_ok
@@ -128,9 +126,31 @@ def recolor_masked_region(
             hue_tolerance_degrees=hue_tolerance_degrees,
         )
 
+    # Use HSV and preserve original Value (brightness) so shaded parts get the target hue but stay dark
+    bgr = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)[:, :, ::-1]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    H_orig = hsv[:, :, 0].astype(np.float64)
+    S_orig = hsv[:, :, 1].astype(np.float64)
+    V_orig = hsv[:, :, 2].astype(np.float64)
+
+    t = (np.clip(target_rgb, 0, 1) * 255).astype(np.uint8)
+    # BGR for OpenCV: (R,G,B) -> (B,G,R)
+    target_bgr = np.array([[[t[2], t[1], t[0]]]], dtype=np.uint8)
+    target_hsv = cv2.cvtColor(target_bgr, cv2.COLOR_BGR2HSV)
+    H_t = float(target_hsv[0, 0, 0])
+    S_t = float(target_hsv[0, 0, 1])
+    # V_t not used; we keep original V to preserve shading
+
+    # In masked region: new hue = target, new sat = blend toward target, new value = original value
+    new_H = H_orig + (H_t - H_orig) * strength * mask_float
+    new_S = S_orig + (S_t - S_orig) * strength * mask_float
+    new_V = V_orig  # keep original brightness so shaded areas stay dark but become red
+
+    new_hsv = np.stack([np.clip(new_H, 0, 179), np.clip(new_S, 0, 255), np.clip(new_V, 0, 255)], axis=-1).astype(np.uint8)
+    new_bgr = cv2.cvtColor(new_hsv, cv2.COLOR_HSV2BGR)
+    painted_rgb = (new_bgr[:, :, ::-1].astype(np.float64) / 255.0)
+
     mask_3 = np.stack([mask_float] * 3, axis=-1)
-    target_bc = np.broadcast_to(target_rgb, (h, w, 3))
-    painted_rgb = rgb * (1 - strength * mask_3) + target_bc * (strength * mask_3)
     out_rgb = rgb * (1 - mask_3) + painted_rgb * mask_3
     out_rgb = (np.clip(out_rgb, 0, 1) * 255).astype(np.uint8)
 

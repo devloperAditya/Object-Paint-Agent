@@ -1,4 +1,4 @@
-"""Gradio UI: single-page Object Paint Agent (rectangle selection, no image click)."""
+"""Gradio UI: single-page Object Paint Agent (rectangle selection, recolor, shadow)."""
 
 from __future__ import annotations
 
@@ -16,25 +16,23 @@ from app.pipeline import (
     export_outputs,
     get_image_with_bbox_overlay,
     run_detection,
+    run_expand_mask_shadow,
     run_recolor,
     run_refine,
     run_segment_rect,
 )
 from app.utils.bbox import draw_rect_overlay
 from app.utils.cache import get_data_dir
-from app.utils.image_io import ensure_rgba, load_image
+from app.utils.image_io import load_image
 
 MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", "1024"))
 MAX_FILE_MB = 20
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
-
-# Default selection box (percent): leave 15% margin on each side
 DEFAULT_LEFT, DEFAULT_TOP = 15.0, 15.0
 DEFAULT_RIGHT, DEFAULT_BOTTOM = 85.0, 85.0
 
 
 def validate_upload(file: gr.File | str | list | None) -> tuple[str | None, np.ndarray | None]:
-    """Validate uploaded file; return (error_msg, image_array)."""
     if file is None:
         return "No file uploaded", None
     if isinstance(file, list):
@@ -58,11 +56,7 @@ def validate_upload(file: gr.File | str | list | None) -> tuple[str | None, np.n
         return str(e), None
 
 
-def on_upload(
-    file: gr.File | None,
-    state: dict,
-) -> tuple[dict, np.ndarray | None, str, list, str, float, float, float, float]:
-    """Handle image upload; reset state and show image."""
+def on_upload(file: gr.File | None, state: dict):
     err, img = validate_upload(file)
     if err:
         return state, None, err, [], "", DEFAULT_LEFT, DEFAULT_TOP, DEFAULT_RIGHT, DEFAULT_BOTTOM
@@ -79,23 +73,12 @@ def on_upload(
     hint = "Adjust the box below to cover your object, then click Generate mask."
     img_with_box = draw_rect_overlay(img, DEFAULT_LEFT, DEFAULT_TOP, DEFAULT_RIGHT, DEFAULT_BOTTOM)
     return (
-        state,
-        img_with_box,
-        "",
-        [],
-        hint,
-        DEFAULT_LEFT,
-        DEFAULT_TOP,
-        DEFAULT_RIGHT,
-        DEFAULT_BOTTOM,
+        state, img_with_box, "", [], hint,
+        DEFAULT_LEFT, DEFAULT_TOP, DEFAULT_RIGHT, DEFAULT_BOTTOM,
     )
 
 
-def on_detect(
-    state: dict,
-    use_grounding_dino: bool,
-) -> tuple[dict, np.ndarray | None, list, str]:
-    """Run detection; update overlay and dropdown."""
+def on_detect(state: dict, use_grounding_dino: bool):
     if state.get("image") is None:
         return state, None, [], "Upload an image first."
     img = state["image"]
@@ -104,15 +87,11 @@ def on_detect(
     state["detect_mode"] = mode
     overlay = get_image_with_bbox_overlay(img, objs, None)
     labels = [f"{o.label} ({o.confidence:.2f})" for o in objs]
-    if not objs:
-        msg = "No detector weights. Use the box sliders to select the object, then Generate mask."
-    else:
-        msg = f"Detected {len(objs)} object(s). Or use the box sliders below."
+    msg = "No detector weights. Use the box sliders to select the object, then Generate mask." if not objs else f"Detected {len(objs)} object(s). Or use the box sliders below."
     return state, overlay, labels, msg
 
 
-def on_select_object(state: dict, choice: str | None) -> tuple[dict, np.ndarray | None]:
-    """Update overlay to highlight selected object."""
+def on_select_object(state: dict, choice: str | None):
     if state.get("image") is None or not state.get("detections"):
         return state, state.get("image")
     objs = state["detections"]
@@ -127,36 +106,8 @@ def on_select_object(state: dict, choice: str | None) -> tuple[dict, np.ndarray 
     return state, overlay
 
 
-def on_rect_change(
-    state: dict,
-    left: float,
-    top: float,
-    right: float,
-    bottom: float,
-) -> np.ndarray | None:
-    """Draw the selection rectangle on the image (no click needed)."""
-    if state.get("image") is None:
-        return None
-    return draw_rect_overlay(
-        state["image"],
-        left,
-        top,
-        right,
-        bottom,
-    )
-
-
-def on_generate_mask(
-    state: dict,
-    left: float,
-    top: float,
-    right: float,
-    bottom: float,
-    morph_kernel: int,
-    feather_px: float,
-    mask_threshold: float,
-) -> tuple[dict, np.ndarray | None, str]:
-    """Segment using the box (percent), refine, show mask."""
+def on_generate_mask(state: dict, left: float, top: float, right: float, bottom: float,
+                     morph_kernel: int, feather_px: float, mask_threshold: float):
     if state.get("image") is None:
         return state, None, "Upload an image first."
     if left >= right or top >= bottom:
@@ -173,14 +124,10 @@ def on_generate_mask(
 
 
 def on_apply_recolor(
-    state: dict,
-    color_hex: str,
-    recolor_strength: float,
-    use_replace_color: bool,
-    replace_color_hex: str,
-    hue_tolerance_degrees: float,
-) -> tuple[dict, np.ndarray | None, str, str]:
-    """Refine mask (from state), recolor, update painted and metadata."""
+    state: dict, color_hex: str, recolor_strength: float,
+    use_replace_color: bool, replace_color_hex: str, hue_tolerance_degrees: float,
+    include_shadow: bool, shadow_extent_px: float, shadow_darkness: float,
+):
     if state.get("image") is None:
         return state, None, "", "Upload an image first."
     if state.get("mask") is None:
@@ -196,18 +143,21 @@ def on_apply_recolor(
         source_hex = (replace_color_hex or "").strip()
         if source_hex and not source_hex.startswith("#") and "rgba" not in source_hex.lower():
             source_hex = "#" + source_hex
+    mask = state["mask"]
+    if include_shadow:
+        mask = run_expand_mask_shadow(
+            state["image"], mask,
+            dilation_px=max(5, int(shadow_extent_px)),
+            shadow_value_threshold=max(0.15, min(0.85, shadow_darkness)),
+        )
     t0 = time.perf_counter()
     painted = run_recolor(
-        state["image"],
-        state["mask"],
-        color_hex,
-        recolor_strength,
+        state["image"], mask, color_hex, recolor_strength,
         source_color_hex=source_hex,
         hue_tolerance_degrees=max(5, min(90, hue_tolerance_degrees)),
     )
     elapsed = time.perf_counter() - t0
     state["painted"] = painted
-    # Normalize color for metadata (always show #RRGGBB)
     r, g, b = parse_color_to_rgb(color_hex)
     color_hex_display = f"#{r:02x}{g:02x}{b:02x}"
     selected = None
@@ -216,8 +166,7 @@ def on_apply_recolor(
         if 0 <= idx < len(state["detections"]):
             selected = state["detections"][idx].label
     meta = build_metadata(
-        selected_object=selected,
-        color_hex=color_hex_display,
+        selected_object=selected, color_hex=color_hex_display,
         mode_detect=state.get("detect_mode", "none"),
         mode_segment=state.get("segment_mode", "grabcut_rect"),
         timings={"recolor_seconds": round(elapsed, 4)},
@@ -226,29 +175,21 @@ def on_apply_recolor(
     return state, painted, json.dumps(meta, indent=2), "Recolor applied."
 
 
-def on_export(state: dict) -> tuple[str, str, str, str]:
-    """Save outputs to data dir; return paths and message."""
+def on_export(state: dict):
     if state.get("painted") is None or state.get("mask") is None or state.get("metadata") is None:
         return None, None, "", "Generate mask and apply recolor first."
     out_dir = get_data_dir()
     base = f"object_paint_{int(time.time())}"
-    p1, p2, p3 = export_outputs(
-        state["painted"],
-        state["mask"],
-        state["metadata"],
-        out_dir,
-        base_name=base,
-    )
+    p1, p2, p3 = export_outputs(state["painted"], state["mask"], state["metadata"], out_dir, base_name=base)
     return str(p1), str(p2), str(p3), f"Exported to {out_dir}"
 
 
 def build_ui() -> gr.Blocks:
-    """Build single-page Gradio app (rectangle selection only)."""
     with gr.Blocks(title="Object Paint Agent") as app:
         gr.Markdown("# Object Paint Agent")
         gr.Markdown(
-            "Upload an image, **adjust the green box** (sliders) to cover the object you want to recolor, "
-            "then click **Generate mask** → pick a color → **Apply recolor**. No clicking on the image."
+            "Upload an image, **adjust the green box** to cover the object, "
+            "then **Generate mask** → pick a color → **Apply recolor**."
         )
         state = gr.State({})
 
@@ -256,55 +197,37 @@ def build_ui() -> gr.Blocks:
             with gr.Column(scale=1):
                 upload = gr.File(label="Upload image (PNG/JPG)", file_types=[".png", ".jpg", ".jpeg"])
                 upload_status = gr.Textbox(label="Status", interactive=False)
-                img_display = gr.Image(
-                    label="Image — selection box shown below",
-                    type="numpy",
-                )
-                gr.Markdown("**Object box** (percent of image — drag to fit your object)")
+                img_display = gr.Image(label="Image — selection box below", type="numpy")
+                gr.Markdown("**Object box** (percent)")
                 with gr.Row():
                     left_slider = gr.Slider(0, 100, value=DEFAULT_LEFT, step=1, label="Left %")
                     top_slider = gr.Slider(0, 100, value=DEFAULT_TOP, step=1, label="Top %")
                 with gr.Row():
                     right_slider = gr.Slider(0, 100, value=DEFAULT_RIGHT, step=1, label="Right %")
                     bottom_slider = gr.Slider(0, 100, value=DEFAULT_BOTTOM, step=1, label="Bottom %")
-                gr.Markdown("When the green box covers your object, click **Generate mask**.")
                 gen_mask_btn = gr.Button("Generate mask")
                 mask_status = gr.Textbox(label="Mask", interactive=False)
                 color_picker = gr.ColorPicker(label="Paint color (hex)", value="#E53935")
                 recolor_btn = gr.Button("Apply recolor")
                 recolor_status = gr.Textbox(label="Recolor", interactive=False)
 
-                with gr.Accordion("Recolor only a specific color (e.g. yellow body, keep beak)", open=False):
-                    gr.Markdown(
-                        "Enable to change only pixels that match a **color to replace**. "
-                        "Example: select the duck, set **Color to replace** to yellow, **Paint color** to blue — only the yellow body turns blue; the orange/red beak stays."
-                    )
-                    use_replace_color = gr.Checkbox(
-                        value=False,
-                        label="Only recolor pixels matching the color below",
-                    )
-                    replace_color_picker = gr.ColorPicker(
-                        label="Color to replace (pick the color in the object to change, e.g. yellow)",
-                        value="#FFEB3B",
-                    )
-                    hue_tolerance_slider = gr.Slider(
-                        10,
-                        60,
-                        value=25,
-                        step=1,
-                        label="Color match tolerance (degrees) — larger = more pixels match",
-                    )
+                with gr.Accordion("Recolor only a specific color", open=False):
+                    gr.Markdown("Only recolor pixels matching a color (e.g. yellow body; beak stays). Shaded areas on the object are included.")
+                    use_replace_color = gr.Checkbox(value=False, label="Only recolor pixels matching the color below")
+                    replace_color_picker = gr.ColorPicker(label="Color to replace (e.g. yellow)", value="#FFEB3B")
+                    hue_tolerance_slider = gr.Slider(10, 60, value=25, step=1, label="Color match tolerance (degrees)")
+
+                with gr.Accordion("Include shadow in recolor", open=False):
+                    gr.Markdown("Expand mask to include the object's cast shadow.")
+                    include_shadow_check = gr.Checkbox(value=False, label="Include shadow in recolor")
+                    shadow_extent_slider = gr.Slider(5, 50, value=20, step=1, label="Shadow extent (pixels)")
+                    shadow_darkness_slider = gr.Slider(0.15, 0.85, value=0.5, step=0.05, label="Shadow darkness")
 
                 with gr.Accordion("Optional: Detect objects", open=False):
                     detect_btn = gr.Button("Detect objects")
-                    use_grounding = gr.Checkbox(label="Use Grounding DINO", value=False)
+                    use_grounding = gr.Checkbox(value=False, label="Use Grounding DINO")
                     detect_status = gr.Textbox(label="Detection", interactive=False)
-                    object_dropdown = gr.Dropdown(
-                        label="Detected objects",
-                        choices=[],
-                        value=None,
-                        allow_custom_value=False,
-                    )
+                    object_dropdown = gr.Dropdown(label="Detected objects", choices=[], value=None, allow_custom_value=False)
 
                 with gr.Accordion("Advanced options", open=False):
                     feather_px = gr.Slider(0, 5, value=2, step=0.5, label="Feather (px)")
@@ -322,83 +245,35 @@ def build_ui() -> gr.Blocks:
                 d2 = gr.File(label="Download mask PNG", visible=True, interactive=False)
                 d3 = gr.File(label="Download metadata JSON", visible=True, interactive=False)
 
-        # Upload: set image and default sliders
-        upload.change(
-            on_upload,
-            [upload, state],
-            [
-                state,
-                img_display,
-                upload_status,
-                object_dropdown,
-                detect_status,
-                left_slider,
-                top_slider,
-                right_slider,
-                bottom_slider,
-            ],
-        )
+        upload.change(on_upload, [upload, state], [state, img_display, upload_status, object_dropdown, detect_status, left_slider, top_slider, right_slider, bottom_slider])
 
-        # When any box slider changes, redraw the green rectangle on the image
         def update_rect(s, l, t, r, b):
             if s.get("image") is None:
                 return None
             return draw_rect_overlay(s["image"], l, t, r, b)
 
         for sl in [left_slider, top_slider, right_slider, bottom_slider]:
-            sl.change(
-                update_rect,
-                [state, left_slider, top_slider, right_slider, bottom_slider],
-                [img_display],
-            )
+            sl.change(update_rect, [state, left_slider, top_slider, right_slider, bottom_slider], [img_display])
 
-        # Generate mask from box
         gen_mask_btn.click(
             on_generate_mask,
-            [
-                state,
-                left_slider,
-                top_slider,
-                right_slider,
-                bottom_slider,
-                morph_kernel,
-                feather_px,
-                mask_threshold,
-            ],
+            [state, left_slider, top_slider, right_slider, bottom_slider, morph_kernel, feather_px, mask_threshold],
             [state, mask_preview, mask_status],
         )
 
-        # Recolor
         recolor_btn.click(
             on_apply_recolor,
             [
-                state,
-                color_picker,
-                recolor_strength,
-                use_replace_color,
-                replace_color_picker,
-                hue_tolerance_slider,
+                state, color_picker, recolor_strength,
+                use_replace_color, replace_color_picker, hue_tolerance_slider,
+                include_shadow_check, shadow_extent_slider, shadow_darkness_slider,
             ],
             [state, painted_display, metadata_json, recolor_status],
         )
 
-        # Export
-        export_btn.click(
-            lambda s: on_export(s),
-            [state],
-            [d1, d2, d3, export_status],
-        )
+        export_btn.click(lambda s: on_export(s), [state], [d1, d2, d3, export_status])
 
-        # Optional detect
-        detect_btn.click(
-            on_detect,
-            [state, use_grounding],
-            [state, img_display, object_dropdown, detect_status],
-        )
-        object_dropdown.change(
-            on_select_object,
-            [state, object_dropdown],
-            [state, img_display],
-        )
+        detect_btn.click(on_detect, [state, use_grounding], [state, img_display, object_dropdown, detect_status])
+        object_dropdown.change(on_select_object, [state, object_dropdown], [state, img_display])
 
     return app

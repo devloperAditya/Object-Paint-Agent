@@ -24,9 +24,9 @@ def parse_color_to_rgb(value: str) -> tuple[int, int, int]:
     # Gradio sometimes sends "#rgba(r,g,b,a)" — strip leading # so rgba regex can match
     if s.startswith("#") and "rgba" in s.lower():
         s = s.lstrip("#").strip()
-    # Hex: #RRGGBB or RRGGBB (exactly 6 hex chars)
+    # Hex: #RRGGBB or RRGGBB (6 hex chars); or 8-char #RRGGBBAA / #AARRGGBB — use first 6 as RRGGBB
     hex_part = s.lstrip("#") if s.startswith("#") else s
-    if len(hex_part) == 6 and all(c in "0123456789abcdefABCDEF" for c in hex_part):
+    if len(hex_part) >= 6 and all(c in "0123456789abcdefABCDEF" for c in hex_part[:6]):
         return tuple(int(hex_part[i : i + 2], 16) for i in (0, 2, 4))
     # CSS rgba(r, g, b, a) or rgb(r, g, b)
     m = re.match(r"rgba?\s*\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)", s)
@@ -46,11 +46,11 @@ def _build_color_match_mask(
     object_mask: np.ndarray,
     source_color_hex: str,
     hue_tolerance_degrees: float,
-    min_saturation: int = 5,
-    min_value: int = 5,
+    min_saturation: int = 0,
+    min_value: int = 0,
 ) -> np.ndarray:
     """Within object_mask, return a float mask [0,1] of pixels similar to source_color (HSV hue).
-    Includes shaded areas on the object (same hue, darker/lower V) by using low min_value/min_saturation.
+    Uses min_saturation=0, min_value=0 so shaded and cast-shadow areas are included when hue matches.
     """
     bgr = (np.clip(image_rgb, 0, 1) * 255).astype(np.uint8)[:, :, ::-1]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -60,15 +60,21 @@ def _build_color_match_mask(
     src_bgr = np.array([[[b, g, r]]], dtype=np.uint8)
     src_hsv = cv2.cvtColor(src_bgr, cv2.COLOR_BGR2HSV)
     h0 = float(src_hsv[0, 0, 0])
-    tol = max(1.0, min(90.0, hue_tolerance_degrees)) / 2.0
+    tol = max(1.0, min(90.0, hue_tolerance_degrees))
 
     d = np.abs(H - h0)
     hue_diff = np.minimum(d, 180.0 - d)
-    hue_ok = (hue_diff <= tol).astype(np.float64)
-    # Low thresholds so shaded/darker areas on the object (same hue, low V/S) are included
+    # Full 1.0 inside tol*1.2 so main object is uniformly recolored; soft falloff only at outer edge (reduces patchiness)
+    full_zone = tol * 1.2
+    falloff_end = tol * 1.8
+    hue_ok = np.where(hue_diff <= full_zone, 1.0, np.clip(1.0 - (hue_diff - full_zone) / (falloff_end - full_zone), 0.0, 1.0))
     sat_ok = (S >= min_saturation).astype(np.float64)
     val_ok = (V >= min_value).astype(np.float64)
     color_mask = hue_ok * sat_ok * val_ok
+    # Include very dark pixels (cast shadow) in the mask so shadow gets recolored when "Include shadow" is on
+    shadow_v_threshold = 35
+    in_shadow = (V.astype(np.float64) < shadow_v_threshold) * object_mask
+    color_mask = np.clip(color_mask + in_shadow, 0, 1)
     return np.clip(object_mask * color_mask, 0, 1).astype(np.float32)
 
 
@@ -96,7 +102,9 @@ def recolor_masked_region(
     alpha_orig = image[:, :, 3].copy()
     h, w = rgb.shape[:2]
 
-    target_rgb = np.array(parse_color_to_rgb(target_hex), dtype=np.float64) / 255.0
+    # Explicit R,G,B 0-255 from parser so channel order is never wrong
+    r_t, g_t, b_t = parse_color_to_rgb(target_hex)
+    target_rgb = np.array([r_t, g_t, b_t], dtype=np.float64) / 255.0
     target_rgb = np.clip(target_rgb, 0, 1)
 
     mask_float = np.asarray(mask, dtype=np.float64)
@@ -126,6 +134,10 @@ def recolor_masked_region(
             hue_tolerance_degrees=hue_tolerance_degrees,
         )
 
+    # Where mask is strong, use full recolor to avoid patchy blend; only soften at edges
+    mask_full = np.where(mask_float >= 0.5, 1.0, mask_float * 2.0)
+    mask_float = np.clip(mask_full, 0, 1)
+
     # Use HSV and preserve original Value (brightness) so shaded parts get the target hue but stay dark
     bgr = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)[:, :, ::-1]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -133,18 +145,29 @@ def recolor_masked_region(
     S_orig = hsv[:, :, 1].astype(np.float64)
     V_orig = hsv[:, :, 2].astype(np.float64)
 
-    t = (np.clip(target_rgb, 0, 1) * 255).astype(np.uint8)
-    # BGR for OpenCV: (R,G,B) -> (B,G,R)
-    target_bgr = np.array([[[t[2], t[1], t[0]]]], dtype=np.uint8)
+    # Single-pixel BGR for OpenCV: use explicit R,G,B so hue is correct (red -> H≈0, not yellow H≈30)
+    target_bgr = np.array([[[b_t, g_t, r_t]]], dtype=np.uint8)
     target_hsv = cv2.cvtColor(target_bgr, cv2.COLOR_BGR2HSV)
     H_t = float(target_hsv[0, 0, 0])
     S_t = float(target_hsv[0, 0, 1])
     # V_t not used; we keep original V to preserve shading
 
-    # In masked region: new hue = target, new sat = blend toward target, new value = original value
-    new_H = H_orig + (H_t - H_orig) * strength * mask_float
+    # Hue is circular (0 and 179 both red); interpolate along shortest path
+    hue_diff = H_t - H_orig
+    hue_diff = np.where(hue_diff > 89.5, hue_diff - 180.0, hue_diff)
+    hue_diff = np.where(hue_diff < -89.5, hue_diff + 180.0, hue_diff)
+    # Shift hue fully to paint color; wrap to [0,179] so gray/silver (H≈0) → blue doesn't clip to red
+    new_H = (H_orig + hue_diff * mask_float + 180.0) % 180.0
+    new_H = np.clip(new_H, 0, 179)
     new_S = S_orig + (S_t - S_orig) * strength * mask_float
-    new_V = V_orig  # keep original brightness so shaded areas stay dark but become red
+    # Keep original brightness; lift only cast shadow (V very low) so paint is visible, not object shading (slots/edges)
+    shadow_v_lift_threshold = 18.0
+    min_v_visible = 28.0
+    new_V = np.where(
+        (mask_float > 0.1) & (V_orig < shadow_v_lift_threshold),
+        np.maximum(V_orig, min_v_visible * mask_float),
+        V_orig,
+    )
 
     new_hsv = np.stack([np.clip(new_H, 0, 179), np.clip(new_S, 0, 255), np.clip(new_V, 0, 255)], axis=-1).astype(np.uint8)
     new_bgr = cv2.cvtColor(new_hsv, cv2.COLOR_HSV2BGR)

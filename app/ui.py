@@ -207,14 +207,17 @@ def build_ui() -> gr.Blocks:
                     bottom_slider = gr.Slider(0, 100, value=DEFAULT_BOTTOM, step=1, label="Bottom %")
                 gen_mask_btn = gr.Button("Generate mask")
                 mask_status = gr.Textbox(label="Mask", interactive=False)
-                color_picker = gr.ColorPicker(label="Paint color (hex)", value="#E53935")
+                color_picker = gr.ColorPicker(label="Paint color (hex)", value="#E53935", elem_id="paint_color_picker")
                 recolor_btn = gr.Button("Apply recolor")
                 recolor_status = gr.Textbox(label="Recolor", interactive=False)
 
                 with gr.Accordion("Recolor only a specific color", open=False):
-                    gr.Markdown("Only recolor pixels matching a color (e.g. yellow body; beak stays). Shaded areas on the object are included.")
-                    use_replace_color = gr.Checkbox(value=False, label="Only recolor pixels matching the color below")
-                    replace_color_picker = gr.ColorPicker(label="Color to replace (e.g. yellow)", value="#FFEB3B")
+                    gr.Markdown(
+                        "Only when you want to change **one** color on the object (e.g. yellow body → red, beak unchanged). "
+                        "Pixels matching the **color below** are changed to the **Paint color** above. For the **whole object** in the paint color, leave this **unchecked**."
+                    )
+                    use_replace_color = gr.Checkbox(value=False, label="Only recolor pixels matching the color below (→ Paint color above)")
+                    replace_color_picker = gr.ColorPicker(label="Color in image to replace (e.g. yellow)", value="#FFEB3B", elem_id="replace_color_picker")
                     hue_tolerance_slider = gr.Slider(10, 60, value=25, step=1, label="Color match tolerance (degrees)")
 
                 with gr.Accordion("Include shadow in recolor", open=False):

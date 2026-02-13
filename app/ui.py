@@ -218,7 +218,7 @@ def build_ui() -> gr.Blocks:
                     )
                     use_replace_color = gr.Checkbox(value=False, label="Only recolor pixels matching the color below (→ Paint color above)")
                     replace_color_picker = gr.ColorPicker(label="Color in image to replace (e.g. yellow)", value="#FFEB3B", elem_id="replace_color_picker")
-                    hue_tolerance_slider = gr.Slider(10, 60, value=25, step=1, label="Color match tolerance (degrees)")
+                    hue_tolerance_slider = gr.Slider(5, 60, value=28, step=1, label="Color match tolerance (degrees) — use 25–35 for yellow body not orange beak; higher for one-color objects")
 
                 with gr.Accordion("Include shadow in recolor", open=False):
                     gr.Markdown("Expand mask to include the object's cast shadow.")

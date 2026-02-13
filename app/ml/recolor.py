@@ -64,17 +64,30 @@ def _build_color_match_mask(
 
     d = np.abs(H - h0)
     hue_diff = np.minimum(d, 180.0 - d)
-    # Full 1.0 inside tol*1.2 so main object is uniformly recolored; soft falloff only at outer edge (reduces patchiness)
-    full_zone = tol * 1.2
-    falloff_end = tol * 1.8
+    # Yellow-orange range (OpenCV H ~10-40): use tight band so yellow body matches but orange beak does not
+    in_yellow_orange = (10 <= h0 <= 45)
+    if in_yellow_orange:
+        full_zone = tol * 0.30
+        falloff_end = tol * 0.40
+    else:
+        full_zone = tol * 0.85
+        falloff_end = max(full_zone + 2.0, tol)
     hue_ok = np.where(hue_diff <= full_zone, 1.0, np.clip(1.0 - (hue_diff - full_zone) / (falloff_end - full_zone), 0.0, 1.0))
+    # Only include gray (very low sat) if hue is close — avoid including white/pale non-matching pixels
+    low_sat = (S.astype(np.float64) < 15.0)
+    hue_ok = np.where(low_sat & (hue_diff <= falloff_end), 1.0, hue_ok)
     sat_ok = (S >= min_saturation).astype(np.float64)
     val_ok = (V >= min_value).astype(np.float64)
     color_mask = hue_ok * sat_ok * val_ok
-    # Include very dark pixels (cast shadow) in the mask so shadow gets recolored when "Include shadow" is on
+    # Include very dark pixels only if they match hue (e.g. dark yellow shadow), not dark non-matching (e.g. beak)
     shadow_v_threshold = 35
-    in_shadow = (V.astype(np.float64) < shadow_v_threshold) * object_mask
-    color_mask = np.clip(color_mask + in_shadow, 0, 1)
+    dark_in_mask = (V.astype(np.float64) < shadow_v_threshold) * object_mask
+    dark_and_matching = dark_in_mask * (hue_ok > 0.5)
+    color_mask = np.clip(color_mask + dark_and_matching, 0, 1)
+    # Include bright highlights only when hue matches (so orange beak is not recolored)
+    highlight_v_threshold = 220.0
+    bright_and_matching = (V.astype(np.float64) >= highlight_v_threshold) * object_mask * (hue_ok > 0.5)
+    color_mask = np.clip(color_mask + bright_and_matching, 0, 1)
     return np.clip(object_mask * color_mask, 0, 1).astype(np.float32)
 
 
@@ -127,12 +140,16 @@ def recolor_masked_region(
 
     # Optionally restrict to pixels matching a source color (e.g. only yellow in the duck)
     if source_color_hex:
+        object_mask_before = mask_float.copy()
         mask_float = _build_color_match_mask(
             rgb,
             mask_float,
             source_color_hex,
             hue_tolerance_degrees=hue_tolerance_degrees,
         )
+        # If no pixels matched (e.g. wrong "color to replace"), fall back to full object so recolor still applies
+        if mask_float.max() < 0.01:
+            mask_float = object_mask_before
 
     # Where mask is strong, use full recolor to avoid patchy blend; only soften at edges
     mask_full = np.where(mask_float >= 0.5, 1.0, mask_float * 2.0)

@@ -19,9 +19,11 @@ COPY scripts/ ./scripts/
 # pyproject.toml references README.md; create if not in context (e.g. partial clone)
 RUN test -f README.md || echo "# Object Paint Agent" > README.md
 
-# Install base app + [detect] (PyTorch, torchvision)
-RUN pip install --no-cache-dir uv \
-    && (uv pip install --system -e ".[detect]" || pip install --no-cache-dir -e ".[detect]")
+# Install CPU-only PyTorch first (avoids ~3GB+ CUDA deps and saves disk space on EC2)
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Install app and remaining deps (torch/torchvision already satisfied; use pip so uv doesn't pull CUDA)
+RUN pip install --no-cache-dir -e ".[detect]"
 
 # Install GroundingDINO from source (PyTorch must be installed first; CPU build when no CUDA)
 RUN git clone --depth 1 https://github.com/IDEA-Research/GroundingDINO.git /tmp/GroundingDINO \

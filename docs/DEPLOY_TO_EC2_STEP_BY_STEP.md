@@ -220,9 +220,21 @@ scp -i "C:\path\to\object-paint-agent-key.pem" -r "C:\path\to\models" ubuntu@EC2
 
 So on EC2 you have `~/object-paint-agent/models/groundingdino/groundingdino_swint_ogc.pth`.
 
+**B.2.5 — Free disk space (avoid “no space left on device”)**
+
+The build needs several GB free. On the EC2 instance run:
+
+```bash
+df -h .
+docker system prune -af
+df -h .
+```
+
+Ensure at least **15–20 GB free** for the build. If the root volume is too small, increase the EBS volume size in the AWS console (EC2 → Volumes → modify), then extend the partition on the instance (e.g. `sudo growpart /dev/nvme0n1 1` and `sudo resize2fs /dev/nvme0n1p1` on Ubuntu, or follow AWS docs for your AMI).
+
 **B.3 — Build and run with Grounding DINO**
 
-On the **EC2 instance** (you must be in `~/object-paint-agent` and have `models/groundingdino/groundingdino_swint_ogc.pth` there):
+On the **EC2 instance** (you must be in `~/object-paint-agent` and have `models/groundingdino/groundingdino_swint_ogc.pth` there). The image uses **CPU-only PyTorch** to keep size and disk use down (~2–3 GB instead of 10+ GB for CUDA).
 
 ```bash
 cd ~/object-paint-agent

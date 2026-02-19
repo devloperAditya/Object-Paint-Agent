@@ -42,7 +42,7 @@ Runs on port 7860. Health check: `GET /health`.
 
 - **No weights**: The app uses GrabCut for segmentation. No download needed.
 - **SAM**: For point-based segmentation, place SAM (e.g. segment-anything) checkpoint in `models/sam2/` and install `segment-anything` if you use the optional wrapper. See `scripts/download_weights.py`.
-- **GroundingDINO**: Detection is disabled by default. To enable, place weights in `models/groundingdino/` and enable "Use Grounding DINO" in the UI.
+- **GroundingDINO**: Detection is disabled by default. To enable: (1) install PyTorch in this project (`uv pip install torch torchvision` or `pip install -e ".[detect]"`); (2) clone [GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) anywhere and install it into this project’s env with **no build isolation** so the build sees torch: `uv pip install -e "C:\path\to\GroundingDINO" --no-build-isolation` (or with pip: `pip install -e "C:\path\to\GroundingDINO" --no-build-isolation` from the project dir); (3) place `groundingdino_swint_ogc.pth` in `models/groundingdino/`; (4) enable "Use Grounding DINO" in the UI.
 
 ## Project layout
 

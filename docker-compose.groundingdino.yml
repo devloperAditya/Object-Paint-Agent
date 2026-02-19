@@ -1,0 +1,24 @@
+# Object Paint Agent with Grounding DINO — use with: docker compose -f docker-compose.groundingdino.yml up -d --build
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.groundingdino
+    ports:
+      - "${PORT:-7860}:7860"
+    environment:
+      - PORT=7860
+      - MAX_IMAGE_PIXELS=1024
+      - MODEL_CACHE_DIR=/app/models
+    volumes:
+      - ./models:/app/models
+      - object_paint_data_gd:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120
+
+volumes:
+  object_paint_data_gd:

@@ -1,5 +1,8 @@
 # AWS Deployment
 
+- **Deploy only on EC2 (one document, no jumping around):** **[DEPLOY_TO_EC2_STEP_BY_STEP.md](./DEPLOY_TO_EC2_STEP_BY_STEP.md)** — single step-by-step guide from AWS login to app in browser.
+- **All options (EC2, App Runner, ECS) and reference:** **[AWS_DEPLOYMENT_STEPS.md](./AWS_DEPLOYMENT_STEPS.md)**.
+
 The app is containerized (CPU-only). It listens on `PORT` (default **7860**) and exposes **GET /health** for load balancers and health checks.
 
 ## Environment variables

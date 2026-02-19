@@ -17,8 +17,10 @@ from app.utils.bbox import draw_bbox_overlay
 from app.utils.image_io import ensure_rgba, get_image_size, save_image
 
 
-def run_detection(image: np.ndarray, use_grounding_dino: bool) -> tuple[list[DetectedObject], str]:
-    """Run detector; return (objects, mode)."""
+def run_detection(
+    image: np.ndarray, use_grounding_dino: bool
+) -> tuple[list[DetectedObject], str, str | None]:
+    """Run detector; return (objects, mode, error_message or None)."""
     return detect_objects(image, use_grounding_dino=use_grounding_dino)
 
 
@@ -119,9 +121,14 @@ def get_image_with_bbox_overlay(
     objects: list[DetectedObject],
     highlight_index: int | None,
 ) -> np.ndarray:
-    """Return image with bboxes drawn; highlight selected object."""
+    """Return image with bboxes drawn only when an object is selected from the dropdown."""
     if not objects:
         return image
-    boxes = [obj.bbox for obj in objects]
-    labels = [f"{obj.label} ({obj.confidence:.2f})" for obj in objects]
-    return draw_bbox_overlay(image, boxes, labels=labels, highlight_index=highlight_index)
+    if highlight_index is not None:
+        # User selected an object: draw only that box
+        obj = objects[highlight_index]
+        boxes = [obj.bbox]
+        labels = [f"{obj.label} ({obj.confidence:.2f})"]
+        return draw_bbox_overlay(image, boxes, labels=labels, highlight_index=0)
+    # No selection (e.g. right after detection): show no boxes
+    return np.asarray(image, dtype=np.uint8).copy()

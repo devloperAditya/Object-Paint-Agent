@@ -1,0 +1,39 @@
+# Object Paint Agent with Grounding DINO object detection (CPU or GPU).
+# Requires: PyTorch, GroundingDINO package, and optionally weights in models/groundingdino/.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps: OpenCV + curl + git (for cloning GroundingDINO)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project
+COPY pyproject.toml ./
+COPY app/ ./app/
+COPY scripts/ ./scripts/
+
+# Install base app + [detect] (PyTorch, torchvision)
+RUN pip install --no-cache-dir uv \
+    && (uv pip install --system -e ".[detect]" || pip install --no-cache-dir -e ".[detect]")
+
+# Install GroundingDINO from source (PyTorch must be installed first; CPU build when no CUDA)
+RUN git clone --depth 1 https://github.com/IDEA-Research/GroundingDINO.git /tmp/GroundingDINO \
+    && pip install -e /tmp/GroundingDINO --no-build-isolation \
+    && rm -rf /tmp/GroundingDINO
+
+# Optional: copy weights into image (omit if you mount at runtime)
+# COPY models/ ./models/
+
+# Non-root user
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+ENV PORT=7860
+EXPOSE 7860
+
+CMD ["sh", "-c", "python -m app.main --host 0.0.0.0 --port ${PORT}"]

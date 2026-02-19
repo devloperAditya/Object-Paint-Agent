@@ -10,14 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Prefer uv for install; fallback to pip
+# Copy project so editable install can see app package
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir uv \
-    && uv pip install --system -e . \
-    || pip install --no-cache-dir -e .
-
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+
+# Prefer uv for install; fallback to pip
+RUN pip install --no-cache-dir uv \
+    && (uv pip install --system -e . || pip install --no-cache-dir -e .)
 
 # Non-root user
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

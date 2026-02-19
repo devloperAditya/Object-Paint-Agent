@@ -56,10 +56,15 @@ def validate_upload(file: gr.File | str | list | None) -> tuple[str | None, np.n
         return str(e), None
 
 
+def _dropdown_update(choices: list, value=None):
+    """Update Dropdown choices and value; avoid passing [] as value (Gradio warning)."""
+    return gr.update(choices=choices, value=value)
+
+
 def on_upload(file: gr.File | None, state: dict):
     err, img = validate_upload(file)
     if err:
-        return state, None, err, [], "", DEFAULT_LEFT, DEFAULT_TOP, DEFAULT_RIGHT, DEFAULT_BOTTOM
+        return state, None, err, _dropdown_update([]), "", DEFAULT_LEFT, DEFAULT_TOP, DEFAULT_RIGHT, DEFAULT_BOTTOM
     state = {
         "image": img,
         "detections": [],
@@ -73,27 +78,43 @@ def on_upload(file: gr.File | None, state: dict):
     hint = "Adjust the box below to cover your object, then click Generate mask."
     img_with_box = draw_rect_overlay(img, DEFAULT_LEFT, DEFAULT_TOP, DEFAULT_RIGHT, DEFAULT_BOTTOM)
     return (
-        state, img_with_box, "", [], hint,
+        state, img_with_box, "", _dropdown_update([]), hint,
         DEFAULT_LEFT, DEFAULT_TOP, DEFAULT_RIGHT, DEFAULT_BOTTOM,
     )
 
 
 def on_detect(state: dict, use_grounding_dino: bool):
     if state.get("image") is None:
-        return state, None, [], "Upload an image first."
+        return state, None, _dropdown_update([]), "Upload an image first."
     img = state["image"]
-    objs, mode = run_detection(img, use_grounding_dino=use_grounding_dino)
+    objs, mode, err = run_detection(img, use_grounding_dino=use_grounding_dino)
     state["detections"] = objs
     state["detect_mode"] = mode
     overlay = get_image_with_bbox_overlay(img, objs, None)
     labels = [f"{o.label} ({o.confidence:.2f})" for o in objs]
-    msg = "No detector weights. Use the box sliders to select the object, then Generate mask." if not objs else f"Detected {len(objs)} object(s). Or use the box sliders below."
-    return state, overlay, labels, msg
+    if objs:
+        msg = f"Detected {len(objs)} object(s). Or use the box sliders below."
+    elif mode == "grounding_dino":
+        msg = "Grounding DINO ran but found no objects. Use the box sliders to select the object, then Generate mask."
+    elif err:
+        msg = f"Detection failed: {err}. Check the console for details. Or use the box sliders to select the object, then Generate mask."
+    else:
+        msg = "No detector used. Enable 'Use Grounding DINO' and ensure the checkpoint is in models/groundingdino/ (see README). Or use the box sliders to select the object, then Generate mask."
+    return state, overlay, _dropdown_update(labels), msg
 
 
-def on_select_object(state: dict, choice: str | None):
-    if state.get("image") is None or not state.get("detections"):
-        return state, state.get("image")
+def on_select_object(
+    state: dict,
+    choice: str | None,
+    left: float,
+    top: float,
+    right: float,
+    bottom: float,
+):
+    """Update state and overlay; when an object is selected, set sliders to its bbox (percent)."""
+    img = state.get("image")
+    if img is None or not state.get("detections"):
+        return state, img, left, top, right, bottom
     objs = state["detections"]
     idx = None
     if choice and choice != "None":
@@ -103,7 +124,16 @@ def on_select_object(state: dict, choice: str | None):
                 break
     state["selected_idx"] = idx
     overlay = get_image_with_bbox_overlay(state["image"], objs, idx)
-    return state, overlay
+    # When an object is selected, set sliders to its bbox so "Generate mask" uses that region
+    h, w = img.shape[0], img.shape[1]
+    if idx is not None and w > 0 and h > 0:
+        x1, y1, x2, y2 = objs[idx].bbox
+        left_pct = round((x1 / w) * 100, 1)
+        top_pct = round((y1 / h) * 100, 1)
+        right_pct = round((x2 / w) * 100, 1)
+        bottom_pct = round((y2 / h) * 100, 1)
+        return state, overlay, left_pct, top_pct, right_pct, bottom_pct
+    return state, overlay, left, top, right, bottom
 
 
 def on_generate_mask(state: dict, left: float, top: float, right: float, bottom: float,
@@ -277,6 +307,10 @@ def build_ui() -> gr.Blocks:
         export_btn.click(lambda s: on_export(s), [state], [d1, d2, d3, export_status])
 
         detect_btn.click(on_detect, [state, use_grounding], [state, img_display, object_dropdown, detect_status])
-        object_dropdown.change(on_select_object, [state, object_dropdown], [state, img_display])
+        object_dropdown.change(
+            on_select_object,
+            [state, object_dropdown, left_slider, top_slider, right_slider, bottom_slider],
+            [state, img_display, left_slider, top_slider, right_slider, bottom_slider],
+        )
 
     return app

@@ -10,10 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project so editable install can see app package
+# Copy project
 COPY pyproject.toml ./
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+RUN test -f README.md || echo "# Object Paint Agent" > README.md
 
 # Prefer uv for install; fallback to pip
 RUN pip install --no-cache-dir uv \

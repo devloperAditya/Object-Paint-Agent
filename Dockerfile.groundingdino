@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml ./
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+# pyproject.toml references README.md; create if not in context (e.g. partial clone)
+RUN test -f README.md || echo "# Object Paint Agent" > README.md
 
 # Install base app + [detect] (PyTorch, torchvision)
 RUN pip install --no-cache-dir uv \

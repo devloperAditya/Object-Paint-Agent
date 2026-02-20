@@ -378,6 +378,7 @@ Use the message you see (e.g. “Checkpoint not found at …”) to fix the path
 | Container is from lite image (no GroundingDINO) | Use `docker compose -f docker-compose.groundingdino.yml up -d` and the **Dockerfile.groundingdino** image. |
 | Out of memory in logs | Use a larger instance (e.g. t3.medium) or set `MAX_IMAGE_PIXELS=768` in the compose environment. |
 | **`ModuleNotFoundError: No module named 'groundingdino'`** | The image was built without the GroundingDINO package (cached layer or failed install). **Rebuild from scratch:** `docker compose -f docker-compose.groundingdino.yml build --no-cache` then `docker compose -f docker-compose.groundingdino.yml up -d`. Watch the build; the step that clones and installs GroundingDINO must succeed. |
+| **`'BertModel' object has no attribute 'get_head_mask'`** | Transformers version is too new for GroundingDINO. The Dockerfile pins `transformers>=4.25,<4.30`. Rebuild the image with the latest Dockerfile: `docker compose -f docker-compose.groundingdino.yml build --no-cache` then `up -d`. |
 
 After any change to `models/` or the compose file, restart:
 

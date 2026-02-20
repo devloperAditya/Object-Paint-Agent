@@ -17,12 +17,31 @@ _CONFIG_PATH = Path(__file__).resolve().parent / "groundingdino_config" / "Groun
 _model_cache: tuple | None = None
 
 
+def _patch_bert_get_head_mask():
+    """Add get_head_mask to BertModel if missing (transformers >= 4.30 removed it)."""
+    from transformers import BertModel as _BertModel
+    if hasattr(_BertModel, "get_head_mask"):
+        return
+    # Compatibility shim: return None when no head pruning (inference). GroundingDINO's
+    # BertModelWarper calls get_head_mask(head_mask, num_hidden_layers); head_mask is usually None.
+    def get_head_mask(head_mask, num_hidden_layers, is_attention_chunked=False):
+        if head_mask is None:
+            return None
+        # Minimal expansion for non-None head_mask (head pruning path; rarely used at inference)
+        import torch
+        if head_mask.dim() == 1:
+            head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+        return head_mask.expand(num_hidden_layers, -1, -1, -1, -1)
+    _BertModel.get_head_mask = staticmethod(get_head_mask)
+
+
 def _get_model():
     """Lazy-load GroundingDINO model. Returns (model, device) or (None, None) if unavailable."""
     global _model_cache
     if _model_cache is not None:
         return _model_cache
     try:
+        _patch_bert_get_head_mask()
         from app.utils.cache import get_model_cache_dir
         import torch
         ckpt = get_model_cache_dir() / "groundingdino" / "groundingdino_swint_ogc.pth"

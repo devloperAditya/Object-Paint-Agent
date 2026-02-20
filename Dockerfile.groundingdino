@@ -22,9 +22,13 @@ COPY scripts/ ./scripts/
 RUN pip install --no-cache-dir uv \
     && (uv pip install --system -e ".[detect]" || pip install --no-cache-dir -e ".[detect]")
 
+# Pin transformers to a version compatible with GroundingDINO's BERT usage (get_head_mask exists in <4.30)
+RUN pip install --no-cache-dir "transformers>=4.25.0,<4.30.0"
+
 # Install GroundingDINO from source (non-editable so we can remove clone; CPU build when no CUDA)
 RUN git clone --depth 1 https://github.com/IDEA-Research/GroundingDINO.git /tmp/GroundingDINO \
     && pip install --no-cache-dir /tmp/GroundingDINO --no-build-isolation \
+    && pip install --no-cache-dir "transformers>=4.25.0,<4.30.0" \
     && python -c "import groundingdino.util.slconfig; print('groundingdino OK')" \
     && rm -rf /tmp/GroundingDINO
 

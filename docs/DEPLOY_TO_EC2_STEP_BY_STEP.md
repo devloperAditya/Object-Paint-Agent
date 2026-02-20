@@ -302,6 +302,91 @@ echo '@reboot cd /home/ubuntu/object-paint-agent && docker compose -f docker-com
 
 ---
 
+## Troubleshooting: Object detection not working on EC2
+
+If you deployed **Path B** (Grounding DINO) but “Detect objects” does nothing or shows an error, work through these checks on the EC2 instance.
+
+**1. Confirm you are running the Grounding DINO stack**
+
+You must use the Grounding DINO compose file and image. If you run `docker compose up -d` (without `-f docker-compose.groundingdino.yml`), you get the **lite** image, which has **no** GroundingDINO. Check:
+
+```bash
+cd ~/Object-Paint-Agent
+docker compose -f docker-compose.groundingdino.yml ps
+```
+
+If the container is not running, start it:
+
+```bash
+docker compose -f docker-compose.groundingdino.yml up -d
+```
+
+**2. In the app UI**
+
+- Upload an image first.
+- Turn **on** the **“Use Grounding DINO”** checkbox.
+- Click **“Detect objects”**.
+
+The **Detection** textbox will show either a success message, “Detection failed: …”, or “No detector used. Enable ‘Use Grounding DINO’…”.
+
+**3. Check that the weights file is visible inside the container**
+
+The app expects the checkpoint at **`/app/models/groundingdino/groundingdino_swint_ogc.pth`** (the compose file mounts `./models` to `/app/models`). On the EC2 instance run:
+
+```bash
+cd ~/Object-Paint-Agent
+docker compose -f docker-compose.groundingdino.yml exec app ls -la /app/models/groundingdino/
+```
+
+You should see **`groundingdino_swint_ogc.pth`**. If the directory is missing or the file is not there:
+
+- On the **host**, ensure the path is exactly (use your real project directory name):
+
+  `~/Object-Paint-Agent/models/groundingdino/groundingdino_swint_ogc.pth`
+
+- Create the directory if needed: `mkdir -p ~/Object-Paint-Agent/models/groundingdino`
+- Copy or download **groundingdino_swint_ogc.pth** into that directory (from your PC with `scp`, or download on EC2 if you have a direct URL).
+- Restart the app so the mount is picked up:
+
+  ```bash
+  docker compose -f docker-compose.groundingdino.yml restart
+  ```
+
+**4. Check container logs for the real error**
+
+Errors (e.g. “Checkpoint not found”, import errors, OOM) appear in the container logs:
+
+```bash
+docker compose -f docker-compose.groundingdino.yml logs app
+```
+
+Or follow logs while you click “Detect objects”:
+
+```bash
+docker compose -f docker-compose.groundingdino.yml logs -f app
+```
+
+Use the message you see (e.g. “Checkpoint not found at …”) to fix the path or the file.
+
+**5. Typical causes**
+
+| Symptom | Fix |
+|--------|-----|
+| “Checkpoint not found at …” | Put `groundingdino_swint_ogc.pth` in `models/groundingdino/` on the host (same directory as where you run `docker compose`). |
+| “No detector used. Enable ‘Use Grounding DINO’…” | Enable the **“Use Grounding DINO”** checkbox and click **Detect objects**. |
+| Detection runs but finds 0 objects | Normal for some images; use the box sliders to select the object, then **Generate mask**. |
+| Container is from lite image (no GroundingDINO) | Use `docker compose -f docker-compose.groundingdino.yml up -d` and the **Dockerfile.groundingdino** image. |
+| Out of memory in logs | Use a larger instance (e.g. t3.medium) or set `MAX_IMAGE_PIXELS=768` in the compose environment. |
+| **`ModuleNotFoundError: No module named 'groundingdino'`** | The image was built without the GroundingDINO package (cached layer or failed install). **Rebuild from scratch:** `docker compose -f docker-compose.groundingdino.yml build --no-cache` then `docker compose -f docker-compose.groundingdino.yml up -d`. Watch the build; the step that clones and installs GroundingDINO must succeed. |
+
+After any change to `models/` or the compose file, restart:
+
+```bash
+docker compose -f docker-compose.groundingdino.yml restart
+```
+
+---
+
 ## Summary checklist
 
 - [ ] Key pair created and .pem/.ppk saved (Step 2).

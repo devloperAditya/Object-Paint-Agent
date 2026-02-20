@@ -10,11 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project
-COPY pyproject.toml ./
+# Copy project (README.md required by pyproject.toml for build)
+COPY pyproject.toml README.md ./
 COPY app/ ./app/
 COPY scripts/ ./scripts/
-RUN test -f README.md || echo "# Object Paint Agent" > README.md
 
 # Prefer uv for install; fallback to pip
 RUN pip install --no-cache-dir uv \
